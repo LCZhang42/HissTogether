@@ -1,0 +1,19 @@
+{
+  "id": "kitten_03_judgmental_eyes",
+  "name": { "zh-CN": "犀利眼", "en": "Judgmental Eyes" },
+  "frameWidth": 64,
+  "frameHeight": 64,
+  "pivot": { "x": 32, "y": 61 },
+  "animations": {
+    "idle": { "file": "idle.png", "frames": 1, "fps": 1, "loop": true },
+    "anticipate": { "file": "anticipate.png", "frames": 1, "fps": 1, "loop": false },
+    "hiss": { "file": "hiss.png", "frames": 1, "fps": 1, "loop": false },
+    "recover": { "file": "recover.png", "frames": 1, "fps": 1, "loop": false },
+    "side_eye": { "file": "side_eye.png", "frames": 1, "fps": 1, "loop": false },
+    "walk": { "file": "walk.png", "frames": 1, "fps": 1, "loop": false },
+    "meow": { "file": "meow.png", "frames": 1, "fps": 1, "loop": false },
+    "boop": { "file": "boop.png", "frames": 1, "fps": 1, "loop": false },
+    "surprised": { "file": "surprised.png", "frames": 1, "fps": 1, "loop": false }
+  }
+}
+

@@ -1,0 +1,29 @@
+{
+  "name": "qiqihar",
+  "version": "0.1.0",
+  "description": "A bilingual four-player co-op browser game where tiny pixel cats try to hiss together.",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @qiqihar/shared && concurrently -k -n server,client -c magenta,cyan \"npm run dev -w @qiqihar/server\" \"npm run dev -w @qiqihar/client\"",
+    "dev:lan": "npm run build -w @qiqihar/shared && concurrently -k -n server,client -c magenta,cyan \"npm run dev -w @qiqihar/server\" \"npm run dev -w @qiqihar/client -- --host 0.0.0.0\"",
+    "build": "npm run build -w @qiqihar/shared && npm run build -w @qiqihar/server && npm run build -w @qiqihar/client",
+    "typecheck": "npm run build -w @qiqihar/shared && npm run typecheck -ws --if-present",
+    "test": "npm run build -w @qiqihar/shared && npm run build -w @qiqihar/server && vitest run",
+    "test:browser": "npm run build -w @qiqihar/shared && npm run build -w @qiqihar/server && vitest run --config vitest.browser.config.ts",
+    "test:watch": "vitest",
+    "validate:assets": "node tools/validate-assets.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "playwright-core": "1.49.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
