@@ -17,7 +17,7 @@
 - [x] Generate, normalize and validate eight 64×64 idle/hiss key poses
 - [x] Render native-scale idle/hiss lineups in Phaser
 - [x] Add server-authoritative hiss intervals and 300 ms overlap judgment
-- [x] Add deterministic bot timing profiles for success, near miss, three-of-four and chorus
+- [x] Add seeded, slot-shuffled bot timing profiles with a fixed-cycle automation mode
 - [x] Add automatic failure retry and room replay after success
 - [x] Add synchronized client hiss poses, success confetti/shake and contextual failure reactions
 - [x] Add bilingual dynamic attempt/result captions and live overlap diagnostics
@@ -68,10 +68,10 @@
 - [x] Phase 3 — multi-device room hardening
 - [x] Phase 4 — MVP animation and visual polish
 
-## Next
+## Next — deferred until testers/devices are available
 
-- [ ] Run physical-device and packet-loss playtests before external user testing
-- [ ] Run the Phase 5 structured player test sets and record findings
+- [ ] Run physical-device and packet-loss playtests before external user testing (currently no phone/tablet available)
+- [ ] Run the Phase 5 structured player test sets and record findings (currently no human test group available)
 
 ## Current limitations
 

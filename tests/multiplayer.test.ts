@@ -65,7 +65,7 @@ describe('authoritative multiplayer room', () => {
   beforeAll(async () => {
     port = 19_000 + Math.floor(Math.random() * 2_000);
     serverProcess = spawn(process.execPath, [resolve('apps/server/dist/index.js')], {
-      env: { ...process.env, PORT: String(port), CHALLENGE_MS: '4500', MATCHMAKING_WAIT_MS: '500' },
+      env: { ...process.env, PORT: String(port), CHALLENGE_MS: '4500', MATCHMAKING_WAIT_MS: '500', BOT_PROFILE_MODE: 'cycle' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await new Promise<void>((resolvePromise, reject) => {

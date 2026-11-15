@@ -4,11 +4,13 @@ import {
   CAT_COUNT,
   NETWORK_LIMITS,
   ROOM_TIMING,
+  buildBotSchedule,
   calculateOverlap,
   classifyFailure,
   intervalFromAcceptedHiss,
   parseClientMessage,
   type AttemptEvent,
+  type BotProfileMode,
   type CatSlot,
   type PlayerSnapshot,
   type RoomPhase,
@@ -58,17 +60,10 @@ interface Room {
   botTimers: NodeJS.Timeout[];
 }
 
-/** Deterministic profiles: success, near miss, three-of-four, terrible chorus. */
-const BOT_PROFILES: ReadonlyArray<ReadonlyArray<number | null>> = [
-  [40, 100, 180],
-  [50, 150, 450],
-  [40, 130, null],
-  [40, 300, 680],
-];
-
 const port = Number(process.env.PORT ?? 8080);
 const challengeMs = Number(process.env.CHALLENGE_MS ?? ROOM_TIMING.challengeMs);
 const matchmakingWaitMs = Number(process.env.MATCHMAKING_WAIT_MS ?? 8_000);
+const botProfileMode: BotProfileMode = process.env.BOT_PROFILE_MODE === 'cycle' ? 'cycle' : 'seeded';
 const rooms = new Map<string, Room>();
 const matchmakingQueue: ClientSession[] = [];
 let matchmakingTimer: NodeJS.Timeout | null = null;
@@ -452,12 +447,10 @@ function resolveAttempt(room: Room): void {
 }
 
 function scheduleBots(room: Room): void {
-  const profile = BOT_PROFILES[(room.attemptId - 1) % BOT_PROFILES.length]!;
-  const bots = [...room.bots].sort((a, b) => a.slot - b.slot);
-  bots.forEach((bot, index) => {
-    const delay = profile[index] ?? null;
-    if (delay === null) return;
-    room.botTimers.push(setTimeout(() => recordHiss(room, bot.slot, false), delay));
+  const schedule = buildBotSchedule(room.id, room.attemptId, room.bots.map((bot) => bot.slot), botProfileMode);
+  schedule.forEach(({ slot, delayMs }) => {
+    if (delayMs === null) return;
+    room.botTimers.push(setTimeout(() => recordHiss(room, slot, false), delayMs));
   });
 }
 

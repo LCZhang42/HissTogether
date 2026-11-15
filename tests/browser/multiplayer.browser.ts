@@ -44,7 +44,7 @@ describe('four-browser room', () => {
     if (!chromePath) throw new Error('Chrome or Edge is required; set CHROME_PATH to its executable.');
 
     serverProcess = spawn(process.execPath, [resolve('apps/server/dist/index.js')], {
-      env: { ...process.env, PORT: String(serverPort), CHALLENGE_MS: '15000' },
+      env: { ...process.env, PORT: String(serverPort), CHALLENGE_MS: '15000', BOT_PROFILE_MODE: 'cycle' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await waitForOutput(serverProcess, 'WebSocket server listening');
