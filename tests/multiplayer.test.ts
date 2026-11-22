@@ -53,7 +53,7 @@ class TestClient {
 }
 
 const isJoined = (message: ServerMessage): message is Extract<ServerMessage, { type: 'joined' }> => message.type === 'joined';
-const isResult = (message: ServerMessage): message is Extract<ServerMessage, { type: 'attempt_result' }> => message.type === 'attempt_result';
+const isResult = (message: ServerMessage): message is Extract<ServerMessage, { type: 'encounter_result' }> => message.type === 'encounter_result';
 const isPong = (message: ServerMessage): message is Extract<ServerMessage, { type: 'pong' }> => message.type === 'pong';
 const isMatchmaking = (message: ServerMessage): message is Extract<ServerMessage, { type: 'matchmaking_state' }> => message.type === 'matchmaking_state';
 
@@ -65,7 +65,7 @@ describe('authoritative multiplayer room', () => {
   beforeAll(async () => {
     port = 19_000 + Math.floor(Math.random() * 2_000);
     serverProcess = spawn(process.execPath, [resolve('apps/server/dist/index.js')], {
-      env: { ...process.env, PORT: String(port), CHALLENGE_MS: '4500', MATCHMAKING_WAIT_MS: '500', BOT_PROFILE_MODE: 'cycle' },
+      env: { ...process.env, PORT: String(port), CHALLENGE_MS: '8000', MATCHMAKING_WAIT_MS: '1000', BOT_PROFILE_MODE: 'cycle' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     await new Promise<void>((resolvePromise, reject) => {
@@ -114,10 +114,15 @@ describe('authoritative multiplayer room', () => {
     return { group, roomId: firstJoined.roomId };
   }
 
-  function hissWithOutboundDelay(client: TestClient, seq: number, delayMs: number): Promise<void> {
+  function hissWithOutboundDelay(client: TestClient, seq: number, delayMs: number, compensationMs = 0): Promise<void> {
     return new Promise((resolvePromise) => {
       setTimeout(() => {
-        client.send({ type: 'action', seq, action: 'hiss' });
+        client.send({
+          type: 'action',
+          seq,
+          action: 'hiss',
+          ...(compensationMs > 0 ? { estimatedServerTimeMs: Date.now() - compensationMs } : {}),
+        });
         resolvePromise();
       }, delayMs);
     });
@@ -135,6 +140,7 @@ describe('authoritative multiplayer room', () => {
     )));
     expect(states.every((message) => message.state.players.length === 4)).toBe(true);
     expect(states.every((message) => message.state.players.every((player) => !player.isBot))).toBe(true);
+    group.forEach((client) => client.close());
   });
 
   it('starts timed-out queued players together and fills remaining slots with bots', async () => {
@@ -149,8 +155,8 @@ describe('authoritative multiplayer room', () => {
     );
     expect(searching.deadlineMs).not.toBeNull();
     const [firstJoined, secondJoined] = await Promise.all([
-      first.waitFor(isJoined, 2_000),
-      second.waitFor(isJoined, 2_000),
+      first.waitFor(isJoined, 3_000),
+      second.waitFor(isJoined, 3_000),
     ]);
     expect(firstJoined.roomId).toBe(secondJoined.roomId);
     const state = await first.waitFor(
@@ -159,6 +165,8 @@ describe('authoritative multiplayer room', () => {
     );
     expect(state.state.players.filter((player) => player.isBot)).toHaveLength(2);
     expect(state.state.players.filter((player) => !player.isBot)).toHaveLength(2);
+    first.close();
+    second.close();
   });
 
   it('lets a queued player replace a bot only after the active attempt resolves', async () => {
@@ -170,11 +178,10 @@ describe('authoritative multiplayer room', () => {
     const newcomer = await connect();
     newcomer.send({ type: 'matchmake' });
     await newcomer.waitFor((message) => isMatchmaking(message) && message.status === 'searching');
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
     expect(newcomer.received.some(isJoined)).toBe(false);
 
     first.send({ type: 'action', seq: 1, action: 'hiss' });
-    const newcomerJoined = await newcomer.waitFor(isJoined, 2_000);
+    const newcomerJoined = await newcomer.waitFor(isJoined, 4_000);
     expect(newcomerJoined.roomId).toBe(firstJoined.roomId);
     const nextAttempt = await newcomer.waitFor(
       (message): message is Extract<ServerMessage, { type: 'room_state' }> =>
@@ -237,8 +244,8 @@ describe('authoritative multiplayer room', () => {
     first.send({ type: 'action', seq: 4, action: 'hiss' });
     const results = await Promise.all(resultPromises);
 
-    expect(results.every((result) => result.success)).toBe(true);
-    expect(new Set(results.map((result) => result.attemptId)).size).toBe(1);
+    expect(results.every((result) => result.correct && result.progress.night.wave === 1)).toBe(true);
+    expect(new Set(results.map((result) => result.encounterId)).size).toBe(1);
     expect(results.every((result) => result.events.length === 4)).toBe(true);
 
     const disconnected = group[3]!;
@@ -276,6 +283,17 @@ describe('authoritative multiplayer room', () => {
     expect(takenOver.playerId).toBe(disconnectedIdentity.playerId);
     await previousConnectionClosed;
 
+    await first.waitFor((message) =>
+      message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 2,
+    );
+    await first.waitFor((message) =>
+      message.type === 'encounter_result' && message.encounterId === 2 && message.outcome === 'correct_hold',
+      4_000,
+    );
+    await first.waitFor((message) =>
+      message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 3,
+      4_000,
+    );
     first.received.length = 0;
     first.send({ type: 'action', seq: 5, action: 'hiss' });
     group[1]!.send({ type: 'action', seq: 2, action: 'hiss' });
@@ -283,47 +301,52 @@ describe('authoritative multiplayer room', () => {
     await first.waitFor((message) => message.type === 'hiss_started');
     takeover.close();
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_700));
-    expect(first.received.some((message) => message.type === 'attempt_result')).toBe(false);
-  }, 12_000);
+    expect(first.received.some((message) => message.type === 'encounter_result')).toBe(false);
+  }, 18_000);
 
-  it('telegraphs an achoo before attempt three and rejects early hiss input', async () => {
+  it('conceals identity through silhouette and clue stages, rejects an early hiss, and punishes hissing at cat mom', async () => {
     const client = await connect();
     client.send({ type: 'join' });
     const joined = await client.waitFor(isJoined);
     client.send({ type: 'quick_start' });
-    await client.waitFor((message) =>
-      message.type === 'room_state' && message.state.attemptId === 1 && message.state.phase === 'playing',
+    const cue = await client.waitFor((message) => message.type === 'trigger_cue' && message.encounterId === 1);
+    expect('kind' in cue).toBe(false);
+    expect(cue.type === 'trigger_cue' && cue.silhouette).toBe('low');
+    const concealed = await client.waitFor((message) =>
+      message.type === 'room_state' && message.state.attemptId === 1 && message.state.phase === 'intro',
     );
-
+    expect(concealed.type === 'room_state' && concealed.state.encounter?.triggerKind).toBeUndefined();
+    const clue = await client.waitFor(
+      (message): message is Extract<ServerMessage, { type: 'trigger_clue' }> =>
+        message.type === 'trigger_clue' && message.encounterId === 1,
+    );
+    expect(clue.clue).toBe('scratching');
+    const clueState = await client.waitFor(
+      (message): message is Extract<ServerMessage, { type: 'room_state' }> =>
+        message.type === 'room_state' && message.state.encounter?.phase === 'clue',
+    );
+    expect(clueState.state.encounter?.triggerKind).toBeUndefined();
+    expect(clueState.state.encounter?.clue).toBe('scratching');
     client.send({ type: 'action', seq: 1, action: 'hiss' });
-    await client.waitFor((message) => message.type === 'attempt_result' && message.attemptId === 1 && message.success);
-    client.send({ type: 'replay' });
+    await client.waitFor((message) =>
+      message.type === 'encounter_result' && message.encounterId === 1 && message.outcome === 'jumped_the_gun',
+    );
     await client.waitFor((message) =>
       message.type === 'room_state' && message.state.attemptId === 2 && message.state.phase === 'playing',
+      4_000,
     );
     client.send({ type: 'action', seq: 2, action: 'hiss' });
-    await client.waitFor((message) => message.type === 'attempt_result' && message.attemptId === 2 && !message.success);
-
-    const chaos = await client.waitFor((message) => message.type === 'chaos_event' && message.kind === 'achoo');
-    expect(chaos.type === 'chaos_event' && chaos.affectedSlots.length).toBe(1);
-    expect(chaos.type === 'chaos_event' && chaos.endMs - chaos.startMs).toBe(1_500);
     await client.waitFor((message) =>
-      message.type === 'room_state' && message.state.attemptId === 3 && message.state.phase === 'intro',
-    );
-    client.send({ type: 'action', seq: 3, action: 'hiss' });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
-    expect(client.received.some((message) => message.type === 'hiss_started' && message.attemptId === 3)).toBe(false);
-    await client.waitFor((message) =>
-      message.type === 'room_state' && message.state.attemptId === 3 && message.state.phase === 'playing',
+      message.type === 'encounter_result' && message.encounterId === 2 && message.outcome === 'false_alarm',
     );
     expect(joined.roomId).toBeTruthy();
-  }, 10_000);
+  }, 12_000);
 
   it('keeps four jittered clients on one authoritative result and recovers next attempt', async () => {
     const { group, roomId } = await connectFour();
     const failedResults = group.map((client) => client.waitFor(
-      (message): message is Extract<ServerMessage, { type: 'attempt_result' }> =>
-        message.type === 'attempt_result' && message.attemptId === 1,
+      (message): message is Extract<ServerMessage, { type: 'encounter_result' }> =>
+        message.type === 'encounter_result' && message.encounterId === 1,
     ));
 
     // Simulated outbound latency leaves only 250 ms of common active hiss: an authoritative failure.
@@ -331,40 +354,86 @@ describe('authoritative multiplayer room', () => {
       hissWithOutboundDelay(client, 10, [0, 100, 200, 450][index]!),
     ));
     const failures = await Promise.all(failedResults);
-    expect(failures.every((result) => !result.success && result.overlapMs < 300)).toBe(true);
+    expect(failures.every((result) => !result.correct && result.outcome === 'desynced_threat' && result.overlapMs < 500)).toBe(true);
+    expect(failures.every((result) => result.progress.night.paws === 2 && result.progress.night.combo === 0)).toBe(true);
     expect(new Set(failures.map((result) => JSON.stringify(result))).size).toBe(1);
 
     await Promise.all(group.map((client) => client.waitFor(
       (message) => message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 2,
+      4_000,
+    )));
+    const falseAlarmResults = group.map((client) => client.waitFor(
+      (message) => message.type === 'encounter_result' && message.encounterId === 2 && message.outcome === 'false_alarm',
+    ));
+    group[0]!.send({ type: 'action', seq: 11, action: 'hiss' });
+    await Promise.all(falseAlarmResults);
+    group[0]!.send({ type: 'replay' });
+    await Promise.all(group.map((client) => client.waitFor(
+      (message) => message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 3,
+      5_000,
     )));
     const recoveredResults = group.map((client) => client.waitFor(
-      (message): message is Extract<ServerMessage, { type: 'attempt_result' }> =>
-        message.type === 'attempt_result' && message.attemptId === 2,
+      (message): message is Extract<ServerMessage, { type: 'encounter_result' }> =>
+        message.type === 'encounter_result' && message.encounterId === 3,
     ));
 
-    // A tighter 300 ms spread leaves roughly 400 ms overlap and succeeds despite unequal latency.
+    // A raw 250 ms spread would fail; the late client's capped 80 ms estimate reduces it to about 170 ms.
     await Promise.all(group.map((client, index) =>
-      hissWithOutboundDelay(client, 11, [0, 80, 160, 300][index]!),
+      hissWithOutboundDelay(client, 12, [0, 50, 100, 250][index]!, index === 3 ? 80 : 0),
     ));
     const recovered = await Promise.all(recoveredResults);
-    expect(recovered.every((result) => result.success && result.overlapMs >= 300)).toBe(true);
+    expect(recovered.every((result) => result.correct && result.overlapMs >= 500)).toBe(true);
+    expect(recovered.every((result) => result.progress.night.paws === 1 && result.progress.night.score > 0)).toBe(true);
     expect(new Set(recovered.map((result) => JSON.stringify(result))).size).toBe(1);
     expect(roomId).toBeTruthy();
-  }, 10_000);
+  }, 16_000);
 
-  it('restarts a successful four-human room from one replay shortcut message', async () => {
+  it('continues a successful wave with combo and score instead of ending the room', async () => {
     const { group } = await connectFour();
     const results = group.map((client) => client.waitFor(isResult));
     group.forEach((client, index) => client.send({ type: 'action', seq: 30 + index, action: 'hiss' }));
-    expect((await Promise.all(results)).every((result) => result.success)).toBe(true);
+    const resolved = await Promise.all(results);
+    expect(resolved.every((result) => result.correct && result.progress.result === null)).toBe(true);
+    expect(resolved.every((result) => result.progress.night.combo === 1 && result.progress.night.score >= 100)).toBe(true);
 
-    group[0]!.send({ type: 'replay' });
-    const replayed = await Promise.all(group.map((client) => client.waitFor(
+    const nextWave = await Promise.all(group.map((client) => client.waitFor(
       (message): message is Extract<ServerMessage, { type: 'room_state' }> =>
         message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 2,
     )));
-    expect(replayed.every((message) => message.state.attempts === 0)).toBe(true);
+    expect(nextWave.every((message) => message.state.night.wave === 2 && message.state.night.paws === 3)).toBe(true);
   });
+
+  it('ends the night after three mistakes and resets all progression on replay', async () => {
+    const client = await connect();
+    client.send({ type: 'join' });
+    await client.waitFor(isJoined);
+    client.send({ type: 'quick_start' });
+
+    for (let wave = 1; wave <= 3; wave += 1) {
+      await client.waitFor((message) =>
+        message.type === 'room_state' && message.state.phase === 'intro' && message.state.attemptId === wave,
+      );
+      client.send({ type: 'action', seq: 50 + wave, action: 'hiss' });
+      await client.waitFor((message) =>
+        message.type === 'encounter_result' && message.encounterId === wave && !message.correct,
+      );
+    }
+
+    const ended = await client.waitFor(
+      (message): message is Extract<ServerMessage, { type: 'room_result' }> =>
+        message.type === 'room_result' && message.result === 'loss',
+    );
+    expect(ended.night).toMatchObject({ wave: 3, paws: 0, combo: 0, score: 0 });
+    await client.waitFor((message) => message.type === 'room_state' && message.state.phase === 'failure');
+
+    client.received.length = 0;
+    client.send({ type: 'replay' });
+    const replayed = await client.waitFor(
+      (message): message is Extract<ServerMessage, { type: 'room_state' }> =>
+        message.type === 'room_state' && message.state.phase === 'intro' && message.state.attemptId === 1,
+    );
+    expect(replayed.state.night).toMatchObject({ wave: 1, paws: 3, combo: 0, score: 0, correctWaves: 0 });
+  }, 10_000);
 
   it('ends an idle room authoritatively and can replay without reconnecting', async () => {
     const client = await connect();
@@ -377,17 +446,18 @@ describe('authoritative multiplayer room', () => {
     expect(playing.type === 'room_state' && playing.state.challengeEndsAtMs).not.toBeNull();
     const result = await client.waitFor(
       (message) => message.type === 'room_result' && message.result === 'timeout',
-      6_000,
+      9_000,
     );
-    expect(result.type === 'room_result' && result.attempts).toBe(0);
+    expect(result.type === 'room_result' && result.attempts).toBeGreaterThanOrEqual(1);
     expect(result.type === 'room_result' && result.bestOverlapMs).toBe(0);
+    expect(result.type === 'room_result' && result.night.paws).toBeGreaterThan(0);
     await client.waitFor((message) => message.type === 'room_state' && message.state.phase === 'timeout');
 
     client.received.length = 0;
     client.send({ type: 'replay' });
     const replayed = await client.waitFor((message) =>
-      message.type === 'room_state' && message.state.phase === 'playing' && message.state.attemptId === 2,
+      message.type === 'room_state' && message.state.phase === 'playing' && message.state.attempts === 0,
     );
     expect(replayed.type === 'room_state' && replayed.state.attempts).toBe(0);
-  }, 8_000);
+  }, 12_000);
 });

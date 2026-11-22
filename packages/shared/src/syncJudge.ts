@@ -6,6 +6,11 @@ export interface OverlapResult {
   success: boolean;
 }
 
+export interface TimingOutlier {
+  slot: CatSlot;
+  timing: 'fast' | 'slow';
+}
+
 export function calculateOverlap(intervals: readonly HissInterval[]): OverlapResult {
   const uniqueSlots = new Set(intervals.map((interval) => interval.slot));
   if (intervals.length !== CAT_COUNT || uniqueSlots.size !== CAT_COUNT) {
@@ -24,7 +29,10 @@ export function intervalFromAcceptedHiss(slot: HissInterval['slot'], acceptedAtM
 }
 
 /** Returns the largest group sharing a valid hiss overlap, for clear post-attempt feedback. */
-export function findSynchronizedSlots(intervals: readonly HissInterval[]): CatSlot[] {
+export function findSynchronizedSlots(
+  intervals: readonly HissInterval[],
+  requiredOverlapMs: number = HISS_TIMING.requiredOverlapMs,
+): CatSlot[] {
   const uniqueIntervals = [...new Map(intervals.map((interval) => [interval.slot, interval])).values()];
   let bestSlots: CatSlot[] = [];
   let bestOverlapMs = 0;
@@ -35,7 +43,7 @@ export function findSynchronizedSlots(intervals: readonly HissInterval[]): CatSl
     const latestStart = Math.max(...group.map((interval) => interval.startMs));
     const earliestEnd = Math.min(...group.map((interval) => interval.endMs));
     const overlapMs = Math.max(0, earliestEnd - latestStart);
-    if (overlapMs < HISS_TIMING.requiredOverlapMs) continue;
+    if (overlapMs < requiredOverlapMs) continue;
     if (group.length > bestSlots.length || (group.length === bestSlots.length && overlapMs > bestOverlapMs)) {
       bestSlots = group.map((interval) => interval.slot).sort((a, b) => a - b);
       bestOverlapMs = overlapMs;
@@ -43,6 +51,25 @@ export function findSynchronizedSlots(intervals: readonly HissInterval[]): CatSl
   }
 
   return bestSlots;
+}
+
+/** Finds the extreme hiss start(s) furthest from the group's median rhythm. */
+export function findTimingOutliers(intervals: readonly HissInterval[]): TimingOutlier[] {
+  const uniqueIntervals = [...new Map(intervals.map((interval) => [interval.slot, interval])).values()];
+  if (uniqueIntervals.length < 2) return [];
+
+  const sortedStarts = uniqueIntervals.map((interval) => interval.startMs).sort((a, b) => a - b);
+  const middle = Math.floor(sortedStarts.length / 2);
+  const median = sortedStarts.length % 2 === 0
+    ? (sortedStarts[middle - 1]! + sortedStarts[middle]!) / 2
+    : sortedStarts[middle]!;
+  const maxDistance = Math.max(...uniqueIntervals.map((interval) => Math.abs(interval.startMs - median)));
+  if (maxDistance === 0) return [];
+
+  return uniqueIntervals
+    .filter((interval) => Math.abs(interval.startMs - median) === maxDistance)
+    .map((interval): TimingOutlier => ({ slot: interval.slot, timing: interval.startMs < median ? 'fast' : 'slow' }))
+    .sort((a, b) => a.slot - b.slot);
 }
 
 export function classifyFailure(intervals: readonly HissInterval[]): FailureGag {

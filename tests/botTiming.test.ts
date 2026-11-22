@@ -1,4 +1,4 @@
-import { buildBotSchedule } from '@qiqihar/shared';
+import { buildBotSchedule, buildTriggerBotSchedule } from '@qiqihar/shared';
 import { describe, expect, it } from 'vitest';
 
 const threeBots = [1, 2, 3] as const;
@@ -39,5 +39,21 @@ describe('buildBotSchedule', () => {
     }
     expect(missedSlots.size).toBeGreaterThan(1);
     expect(missedSlots).not.toEqual(new Set([3]));
+  });
+});
+
+describe('buildTriggerBotSchedule', () => {
+  it('keeps threat reactions tight enough for one human to set the outcome', () => {
+    const schedule = buildTriggerBotSchedule('TEST01', 1, 'dog', threeBots);
+    const delays = schedule.map((item) => item.delayMs as number).sort((a, b) => a - b);
+    expect(delays).toEqual([650, 650, 650]);
+  });
+
+  it('never makes a normal bot hiss at cat mom', () => {
+    expect(buildTriggerBotSchedule('TEST01', 2, 'cat-mom', threeBots).every((item) => item.delayMs === null)).toBe(true);
+  });
+
+  it('recognizes the fake cat mom as a threat', () => {
+    expect(buildTriggerBotSchedule('TEST01', 6, 'vacuum-mom', threeBots).every((item) => item.delayMs !== null)).toBe(true);
   });
 });

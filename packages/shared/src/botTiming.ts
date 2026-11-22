@@ -1,4 +1,5 @@
-import type { CatSlot } from './types.js';
+import { TRIGGER_TIMING } from './constants.js';
+import type { CatSlot, TriggerKind } from './types.js';
 
 export type BotProfileMode = 'seeded' | 'cycle';
 
@@ -54,5 +55,24 @@ export function buildBotSchedule(
   return shuffledSlots.map((slot, index) => ({
     slot,
     delayMs: profile[(index + delayOffset) % profile.length] ?? null,
+  }));
+}
+
+/** Fair trigger-mode bots react to the reveal, stay quiet for cat mom, and keep a tight shared rhythm. */
+export function buildTriggerBotSchedule(
+  roomId: string,
+  encounterId: number,
+  triggerKind: TriggerKind,
+  botSlots: readonly CatSlot[],
+): BotTimingAssignment[] {
+  const sortedSlots = [...botSlots].sort((a, b) => {
+    const scoreA = hashSeed(`${roomId}:${encounterId}:trigger-slot:${a}`);
+    const scoreB = hashSeed(`${roomId}:${encounterId}:trigger-slot:${b}`);
+    return (scoreA - scoreB) || (a - b);
+  });
+  if (triggerKind === 'cat-mom') return sortedSlots.map((slot) => ({ slot, delayMs: null }));
+  return sortedSlots.map((slot, index) => ({
+    slot,
+    delayMs: TRIGGER_TIMING.botBaseDelayMs + index * TRIGGER_TIMING.botStepDelayMs,
   }));
 }

@@ -1,4 +1,4 @@
-import type { FailureGag } from '@qiqihar/shared';
+import type { FailureGag, TriggerClue, TriggerKind } from '@qiqihar/shared';
 
 export class AudioManager {
   private context?: AudioContext;
@@ -79,6 +79,50 @@ export class AudioManager {
   }
 
   playBoop(): void { this.playTone(460, 760, 0.12, 0.035, 'sine'); }
+
+  playApproach(): void {
+    this.playTone(125, 92, 0.11, 0.025, 'sine');
+    window.setTimeout(() => this.playTone(118, 86, 0.12, 0.022, 'sine'), 190);
+  }
+
+  playClue(clue: TriggerClue): void {
+    if (clue === 'scratching') {
+      this.playTone(420, 265, 0.09, 0.028, 'sawtooth');
+      window.setTimeout(() => this.playTone(390, 245, 0.08, 0.024, 'sawtooth'), 95);
+      return;
+    }
+    if (clue === 'footsteps') {
+      this.playTone(105, 82, 0.08, 0.04, 'triangle');
+      window.setTimeout(() => this.playTone(112, 86, 0.08, 0.036, 'triangle'), 150);
+      return;
+    }
+    this.playTone(1_180, 1_520, 0.16, 0.028, 'sine');
+    if (clue === 'warped-bell') {
+      window.setTimeout(() => this.playTone(96, 78, 0.22, 0.025, 'sawtooth'), 65);
+      window.setTimeout(() => this.playTone(720, 590, 0.05, 0.018, 'square'), 150);
+    }
+  }
+
+  playTrigger(kind: TriggerKind): void {
+    if (kind === 'cat-mom') {
+      this.playTone(880, 1_320, 0.24, 0.035, 'sine');
+      window.setTimeout(() => this.playTone(1_100, 1_650, 0.2, 0.025, 'sine'), 120);
+      return;
+    }
+    if (kind === 'dog') {
+      this.playTone(210, 135, 0.16, 0.07, 'square');
+      window.setTimeout(() => this.playTone(245, 150, 0.13, 0.055, 'square'), 135);
+      return;
+    }
+    if (kind === 'vacuum-mom') {
+      this.playTone(96, 82, 0.3, 0.045, 'sawtooth');
+      window.setTimeout(() => this.playTone(740, 620, 0.055, 0.028, 'square'), 70);
+      window.setTimeout(() => this.playTone(740, 620, 0.055, 0.028, 'square'), 180);
+      return;
+    }
+    this.playTone(145, 105, 0.1, 0.03, 'triangle');
+    window.setTimeout(() => this.playTone(132, 96, 0.12, 0.028, 'triangle'), 210);
+  }
 
   playFail(gag?: FailureGag): void {
     if (gag === 'near-miss') {

@@ -61,6 +61,31 @@
 - [x] Add local, opt-in structured playtest report export
 - [x] Automate a full browser outage/reconnect drill inside the reserved-slot window
 - [x] Add the Phase 5 physical-device and structured-session runbook
+- [x] Add server-authoritative approaching/reveal encounters without leaking trigger identity during the cue
+- [x] Add dog, stranger and cat-mom trigger rules with correct hold and false-alarm outcomes
+- [x] Tighten threat synchronization to 500 ms overlap (about 200 ms maximum start spread)
+- [x] Add trigger-driven fair bot timing that never hisses at cat mom
+- [x] Add bilingual trigger instructions, initial NPC staging and outcome-specific kitten reactions
+- [x] Replace trigger placeholders with validated transparent 64×64 dog, cat-mom and stranger pixel sprites
+- [x] Add distinct synthesized approach, dog, stranger and cat-mom reveal cues
+- [x] Add trigger-specific reveal and result motion: threat retreat/lunge, cat-mom approach/false-alarm recoil
+- [x] Add clear static trigger result states for reduced-motion mode
+- [x] Separate kittens and triggers into back-row / foreground lanes with deterministic random encounter placement
+- [x] Replace the ambiguous pre-trigger oval with an approaching dust trail and question cue
+- [x] Enlarge the 8:5 game stage, shrink kitten sprites and move HUD boards away from the play space
+- [x] Add encounter metrics to exported playtest reports
+- [x] Cover cue concealment, early hiss, cat-mom false alarms and strict jitter recovery in automated tests
+- [x] Add deterministic 450/500/550 ms trigger-balance simulation across voice, visual-only, mixed-RTT and bot-assisted scenarios
+- [x] Add server-capped 80 ms input-latency compensation using the client's clock-offset-corrected timestamp
+- [x] Verify capped compensation in unit, protocol and WebSocket integration tests
+- [x] Replace the one-encounter win with a six-wave Cat Night Shift
+- [x] Add three shared paws, correct-call combo, perfect-sync bonuses and authoritative scoring
+- [x] Add compact night progress HUD plus bilingual win, loss and timeout settlement screens
+- [x] Cover full-night victory, three-mistake defeat, replay reset and settlement layout in automated tests
+- [x] Add silhouette → clue → full-reveal staging without leaking trigger identity
+- [x] Give real and fake Cat Mom one shared catlike silhouette with normal versus warped bell clues
+- [x] Keep waves 1–2 guided, then remove answer copy, safe/threat color and HISS/HOLD coaching from waves 3–6
+- [x] Cover clue-stage early hisses, concealed room snapshots and advanced-wave browser playthroughs
 
 ## Current phase
 
@@ -75,6 +100,7 @@
 
 ## Current limitations
 
+- Dog, stranger and cat-mom use single-pose pixel sprites with Phaser reveal/result motion and distinct audio cues; true frame-by-frame NPC animation remains optional polish.
 - The MVP uses nine timed key poses per kitten; true multi-frame walk cycles remain optional post-playtest polish.
 - Invite rooms, authoritative results, reconnect grace, simulated jitter and four-browser automation work; physical-device and packet-loss playtests remain.
 - Movement, meow, boop and Achoo now use dedicated poses plus short tweens.

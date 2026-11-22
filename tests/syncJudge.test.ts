@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calculateOverlap, classifyFailure, findSynchronizedSlots, intervalFromAcceptedHiss, type HissInterval } from '@qiqihar/shared';
+import { calculateOverlap, classifyFailure, findSynchronizedSlots, findTimingOutliers, intervalFromAcceptedHiss, type HissInterval } from '@qiqihar/shared';
 
 function interval(slot: 0 | 1 | 2 | 3, startMs: number, endMs: number): HissInterval {
   return { slot, startMs, endMs };
@@ -61,6 +61,28 @@ describe('findSynchronizedSlots', () => {
 
   it('does not mark a single isolated hiss as synchronized', () => {
     expect(findSynchronizedSlots([interval(0, 0, 700)])).toEqual([]);
+  });
+
+  it('supports the stricter trigger encounter overlap threshold', () => {
+    const intervals = [
+      interval(0, 0, 700), interval(1, 40, 740), interval(2, 80, 780), interval(3, 400, 1_100),
+    ];
+    expect(findSynchronizedSlots(intervals)).toEqual([0, 1, 2, 3]);
+    expect(findSynchronizedSlots(intervals, 500)).toEqual([0, 1, 2]);
+  });
+});
+
+describe('findTimingOutliers', () => {
+  it('marks the one late cat furthest from the group median', () => {
+    expect(findTimingOutliers([
+      interval(0, 0, 700), interval(1, 40, 740), interval(2, 80, 780), interval(3, 600, 1_300),
+    ])).toEqual([{ slot: 3, timing: 'slow' }]);
+  });
+
+  it('marks both extremes when they are equally far from the median', () => {
+    expect(findTimingOutliers([
+      interval(0, 0, 700), interval(1, 100, 800), interval(2, 200, 900), interval(3, 300, 1_000),
+    ])).toEqual([{ slot: 0, timing: 'fast' }, { slot: 3, timing: 'slow' }]);
   });
 });
 

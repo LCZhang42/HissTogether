@@ -9,7 +9,7 @@ export default defineConfig({
   },
   test: {
     include: ['tests/browser/**/*.browser.ts'],
-    testTimeout: 60_000,
+    testTimeout: 90_000,
     // First Chrome startup can be slow on Windows while its sandbox initializes.
     hookTimeout: 90_000,
     fileParallelism: false,

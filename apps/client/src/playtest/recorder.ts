@@ -1,11 +1,12 @@
-import type { FailureGag, Locale, RoomPhase, ServerMessage } from '@qiqihar/shared';
+import type { EncounterOutcome, FailureGag, Locale, RoomPhase, ServerMessage, TriggerKind } from '@qiqihar/shared';
 import type { NetworkMetrics } from '../network/socketClient';
 
 type AttemptResult = Extract<ServerMessage, { type: 'attempt_result' }>;
+type EncounterResultMessage = Extract<ServerMessage, { type: 'encounter_result' }>;
 type RoomResult = Extract<ServerMessage, { type: 'room_result' }>;
 
 export interface PlaytestReport {
-  version: 1;
+  version: 3;
   roomId: string;
   localSlot?: number;
   locale: Locale;
@@ -15,7 +16,21 @@ export interface PlaytestReport {
   result: RoomResult['result'];
   attempts: number;
   bestOverlapMs: number;
+  finalScore: number;
+  correctWaves: number;
+  bestCombo: number;
+  pawsRemaining: number;
   failureCounts: Partial<Record<FailureGag, number>>;
+  outcomeCounts: Partial<Record<EncounterOutcome, number>>;
+  encounters: Array<{
+    encounterId: number;
+    triggerKind: TriggerKind;
+    outcome: EncounterOutcome;
+    overlapMs: number;
+    startSpreadMs: number;
+    earlySlots: number[];
+    missingSlots: number[];
+  }>;
   disconnects: number;
   phaseDurationsMs: Partial<Record<RoomPhase, number>>;
   feedbackFraction: number;
@@ -29,6 +44,7 @@ export class PlaytestRecorder {
   private endedAtMs: number | undefined;
   private result: RoomResult | undefined;
   private attempts: AttemptResult[] = [];
+  private encounters: EncounterResultMessage[] = [];
   private disconnects = 0;
   private currentPhase: RoomPhase | undefined;
   private phaseStartedAtMs: number | undefined;
@@ -51,6 +67,10 @@ export class PlaytestRecorder {
       this.attempts.push(message);
       return;
     }
+    if (message.type === 'encounter_result' && this.startedAtMs !== undefined && this.endedAtMs === undefined) {
+      this.encounters.push(message);
+      return;
+    }
     if (message.type === 'room_result' && this.startedAtMs !== undefined && this.endedAtMs === undefined) {
       this.flushPhase(nowMs);
       this.endedAtMs = nowMs;
@@ -69,10 +89,14 @@ export class PlaytestRecorder {
     this.attempts.forEach((attempt) => {
       if (!attempt.success && attempt.gag) failureCounts[attempt.gag] = (failureCounts[attempt.gag] ?? 0) + 1;
     });
+    const outcomeCounts: Partial<Record<EncounterOutcome, number>> = {};
+    this.encounters.forEach((encounter) => {
+      outcomeCounts[encounter.outcome] = (outcomeCounts[encounter.outcome] ?? 0) + 1;
+    });
     const activeMs = (this.phaseDurationsMs.playing ?? 0) + (this.phaseDurationsMs.intro ?? 0);
     const feedbackMs = this.phaseDurationsMs.feedback ?? 0;
     return {
-      version: 1,
+      version: 3,
       roomId: this.roomId,
       ...(this.localSlot === undefined ? {} : { localSlot: this.localSlot }),
       locale,
@@ -82,7 +106,21 @@ export class PlaytestRecorder {
       result: this.result.result,
       attempts: this.result.attempts,
       bestOverlapMs: this.result.bestOverlapMs,
+      finalScore: this.result.night.score,
+      correctWaves: this.result.night.correctWaves,
+      bestCombo: this.result.night.bestCombo,
+      pawsRemaining: this.result.night.paws,
       failureCounts,
+      outcomeCounts,
+      encounters: this.encounters.map((encounter) => ({
+        encounterId: encounter.encounterId,
+        triggerKind: encounter.triggerKind,
+        outcome: encounter.outcome,
+        overlapMs: encounter.overlapMs,
+        startSpreadMs: encounter.startSpreadMs,
+        earlySlots: encounter.earlySlots,
+        missingSlots: encounter.missingSlots,
+      })),
       disconnects: this.disconnects,
       phaseDurationsMs: { ...this.phaseDurationsMs },
       feedbackFraction: activeMs + feedbackMs === 0 ? 0 : feedbackMs / (activeMs + feedbackMs),
@@ -97,6 +135,7 @@ export class PlaytestRecorder {
     this.endedAtMs = undefined;
     this.result = undefined;
     this.attempts = [];
+    this.encounters = [];
     this.disconnects = 0;
     this.currentPhase = undefined;
     this.phaseStartedAtMs = undefined;
@@ -108,6 +147,7 @@ export class PlaytestRecorder {
     this.endedAtMs = undefined;
     this.result = undefined;
     this.attempts = [];
+    this.encounters = [];
     this.disconnects = 0;
     this.phaseDurationsMs = {};
     this.currentPhase = phase;

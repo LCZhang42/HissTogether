@@ -4,18 +4,28 @@ import {
   CAT_COUNT,
   NETWORK_LIMITS,
   ROOM_TIMING,
-  buildBotSchedule,
-  calculateOverlap,
-  classifyFailure,
+  TRIGGER_TIMING,
+  applyNightRound,
+  buildTriggerBotSchedule,
+  compensatedAcceptedAtMs,
+  createNightShift,
+  evaluateEncounter,
   intervalFromAcceptedHiss,
   parseClientMessage,
+  startNightWave,
+  triggerCategory,
+  triggerClue,
+  triggerKindForEncounter,
+  triggerSilhouette,
   type AttemptEvent,
-  type BotProfileMode,
   type CatSlot,
+  type EncounterSnapshot,
   type PlayerSnapshot,
   type RoomPhase,
   type RoomSnapshot,
   type ServerMessage,
+  type TriggerKind,
+  type NightShiftSnapshot,
 } from '@qiqihar/shared';
 
 interface ClientSession {
@@ -52,18 +62,21 @@ interface Room {
   attempts: number;
   bestOverlapMs: number;
   hisses: Map<CatSlot, AttemptEvent>;
+  earlyHisses: Set<CatSlot>;
+  encounter: EncounterSnapshot | null;
+  triggerKind: TriggerKind | null;
   resolveTimer: NodeJS.Timeout | null;
   feedbackTimer: NodeJS.Timeout | null;
   chaosTimer: NodeJS.Timeout | null;
   challengeTimer: NodeJS.Timeout | null;
   challengeEndsAtMs: number | null;
   botTimers: NodeJS.Timeout[];
+  night: NightShiftSnapshot;
 }
 
 const port = Number(process.env.PORT ?? 8080);
 const challengeMs = Number(process.env.CHALLENGE_MS ?? ROOM_TIMING.challengeMs);
 const matchmakingWaitMs = Number(process.env.MATCHMAKING_WAIT_MS ?? 8_000);
-const botProfileMode: BotProfileMode = process.env.BOT_PROFILE_MODE === 'cycle' ? 'cycle' : 'seeded';
 const rooms = new Map<string, Room>();
 const matchmakingQueue: ClientSession[] = [];
 let matchmakingTimer: NodeJS.Timeout | null = null;
@@ -88,12 +101,16 @@ function createRoom(id: string, publicMatch = false): Room {
     attempts: 0,
     bestOverlapMs: 0,
     hisses: new Map(),
+    earlyHisses: new Set(),
+    encounter: null,
+    triggerKind: null,
     resolveTimer: null,
     feedbackTimer: null,
     chaosTimer: null,
     challengeTimer: null,
     challengeEndsAtMs: null,
     botTimers: [],
+    night: createNightShift(),
   };
 }
 
@@ -142,7 +159,21 @@ function snapshot(room: Room): RoomSnapshot {
     bestOverlapMs: room.bestOverlapMs,
     challengeEndsAtMs: room.challengeEndsAtMs,
     serverTimeMs: Date.now(),
+    encounter: room.encounter,
+    night: room.night,
   };
+}
+
+function isTerminalPhase(phase: RoomPhase): boolean {
+  return phase === 'success' || phase === 'failure' || phase === 'timeout';
+}
+
+function resetNight(room: Room): void {
+  clearChallengeTimer(room);
+  room.attemptId = 0;
+  room.attempts = 0;
+  room.bestOverlapMs = 0;
+  room.night = createNightShift();
 }
 
 function broadcastRoom(room: Room): void {
@@ -205,7 +236,7 @@ function takeQueuedSession(): ClientSession | undefined {
 }
 
 function fillPublicRoomFromQueue(room: Room): number {
-  if (!room.publicMatch || room.reservations.size > 0 || !['waiting', 'feedback', 'success'].includes(room.phase)) return 0;
+  if (!room.publicMatch || room.reservations.size > 0 || !['waiting', 'feedback', 'success', 'failure', 'timeout'].includes(room.phase)) return 0;
   let added = 0;
   while (matchmakingQueue.length > 0) {
     const occupied = occupiedSlots(room);
@@ -245,14 +276,13 @@ function processMatchmakingQueue(): void {
   cleanMatchmakingQueue();
 
   const availableRooms = [...rooms.values()]
-    .filter((room) => room.publicMatch && (room.bots.length > 0 || participants(room).length < CAT_COUNT) && room.reservations.size === 0 && ['waiting', 'feedback', 'success'].includes(room.phase))
+    .filter((room) => room.publicMatch && (room.bots.length > 0 || participants(room).length < CAT_COUNT) && room.reservations.size === 0 && ['waiting', 'feedback', 'success', 'failure', 'timeout'].includes(room.phase))
     .sort((a, b) => (b.players.size - a.players.size) || (a.attemptId - b.attemptId));
   for (const room of availableRooms) {
     const addedPlayers = fillPublicRoomFromQueue(room);
-    if (room.phase === 'success' && addedPlayers > 0) {
+    if (isTerminalPhase(room.phase) && addedPlayers > 0) {
       room.phase = 'feedback';
-      room.attempts = 0;
-      room.bestOverlapMs = 0;
+      resetNight(room);
       broadcastRoom(room);
       room.feedbackTimer = setTimeout(() => startAttempt(room), ROOM_TIMING.feedbackMs);
     }
@@ -284,9 +314,17 @@ function processMatchmakingQueue(): void {
 
 function pauseRoomForMissingParticipant(room: Room): void {
   if (participants(room).length >= CAT_COUNT) return;
+  const interruptedActiveWave = room.phase === 'intro' || room.phase === 'playing';
   clearAttemptTimers(room);
   clearChallengeTimer(room);
   room.hisses.clear();
+  room.earlyHisses.clear();
+  room.encounter = null;
+  room.triggerKind = null;
+  if (interruptedActiveWave) {
+    room.attemptId = room.attempts;
+    room.night = { ...room.night, wave: room.attempts };
+  }
   room.phase = 'waiting';
 }
 
@@ -351,11 +389,11 @@ function clearChallengeTimer(room: Room): void {
 }
 
 function finishRoomTimeout(room: Room): void {
-  if (room.phase === 'success' || room.phase === 'timeout') return;
+  if (isTerminalPhase(room.phase)) return;
   clearAttemptTimers(room);
   clearChallengeTimer(room);
   room.phase = 'timeout';
-  broadcast(room, { type: 'room_result', result: 'timeout', attempts: room.attempts, bestOverlapMs: room.bestOverlapMs });
+  broadcast(room, { type: 'room_result', result: 'timeout', attempts: room.attempts, bestOverlapMs: room.bestOverlapMs, night: room.night });
   broadcastRoom(room);
 }
 
@@ -365,19 +403,12 @@ function ensureChallengeTimer(room: Room): void {
   room.challengeTimer = setTimeout(() => finishRoomTimeout(room), challengeMs);
 }
 
-function beginPlayableAttempt(room: Room): void {
-  if (participants(room).length !== CAT_COUNT) {
-    room.phase = 'waiting';
-    broadcastRoom(room);
-    return;
-  }
-  room.phase = 'playing';
-  broadcastRoom(room);
-}
-
 function startAttempt(room: Room): void {
   clearAttemptTimers(room);
   room.hisses.clear();
+  room.earlyHisses.clear();
+  room.encounter = null;
+  room.triggerKind = null;
   if (participants(room).length !== CAT_COUNT) {
     room.phase = 'waiting';
     broadcastRoom(room);
@@ -385,57 +416,104 @@ function startAttempt(room: Room): void {
   }
   ensureChallengeTimer(room);
   room.attemptId += 1;
-  if (room.attemptId % 4 === 3) {
-    room.phase = 'intro';
-    broadcastRoom(room);
-    const availableSlots = participants(room).map((player) => player.slot);
-    const roomSeed = [...room.id].reduce((total, character) => total + character.charCodeAt(0), 0);
-    const affectedSlot = availableSlots[(roomSeed + room.attemptId) % availableSlots.length]!;
-    const startMs = Date.now();
-    const endMs = startMs + ROOM_TIMING.achooWarningMs;
-    broadcast(room, {
-      type: 'chaos_event',
-      eventId: `${room.id}-${room.attemptId}-achoo`,
-      kind: 'achoo',
-      startMs,
-      endMs,
-      affectedSlots: [affectedSlot],
-    });
-    room.chaosTimer = setTimeout(() => beginPlayableAttempt(room), ROOM_TIMING.achooWarningMs);
-    return;
-  }
-  beginPlayableAttempt(room);
+  room.night = startNightWave(room.night, room.attemptId);
+  room.triggerKind = triggerKindForEncounter(room.attemptId);
+  const cueStartedAtMs = Date.now();
+  const clueAtMs = cueStartedAtMs + TRIGGER_TIMING.silhouetteMs;
+  const revealAtMs = cueStartedAtMs + TRIGGER_TIMING.approachMs;
+  const responseMs = triggerCategory(room.triggerKind) === 'safe'
+    ? TRIGGER_TIMING.safeHoldMs
+    : TRIGGER_TIMING.threatResponseMs;
+  const roomSeed = [...room.id].reduce((total, character) => total + character.charCodeAt(0), 0);
+  const direction = (roomSeed + room.attemptId) % 2 === 0 ? 'left' : 'right';
+  room.encounter = {
+    encounterId: room.attemptId,
+    phase: 'approaching',
+    direction,
+    silhouette: triggerSilhouette(room.triggerKind),
+    cueStartedAtMs,
+    clueAtMs,
+    revealAtMs,
+    responseEndsAtMs: revealAtMs + responseMs,
+  };
+  room.phase = 'intro';
+  broadcastRoom(room);
+  broadcast(room, {
+    type: 'trigger_cue', encounterId: room.attemptId, direction,
+    silhouette: room.encounter.silhouette, cueStartedAtMs, clueAtMs, revealAtMs,
+  });
+  room.chaosTimer = setTimeout(() => showTriggerClue(room, room.attemptId), TRIGGER_TIMING.silhouetteMs);
 }
 
-function resolveAttempt(room: Room): void {
-  if (room.phase !== 'playing') return;
+function showTriggerClue(room: Room, encounterId: number): void {
+  if (room.phase !== 'intro' || room.attemptId !== encounterId || room.encounter?.phase !== 'approaching' || !room.triggerKind) return;
+  const clue = triggerClue(room.triggerKind);
+  room.encounter = { ...room.encounter, phase: 'clue', clue };
+  broadcast(room, {
+    type: 'trigger_clue', encounterId, direction: room.encounter.direction,
+    silhouette: room.encounter.silhouette, clue, clueAtMs: room.encounter.clueAtMs,
+    revealAtMs: room.encounter.revealAtMs,
+  });
+  broadcastRoom(room);
+  room.chaosTimer = setTimeout(
+    () => revealTrigger(room, encounterId),
+    Math.max(0, room.encounter!.revealAtMs - Date.now()),
+  );
+}
+
+function revealTrigger(room: Room, encounterId: number): void {
+  if (room.phase !== 'intro' || room.attemptId !== encounterId || !room.encounter || !room.triggerKind) return;
+  if (participants(room).length !== CAT_COUNT) {
+    pauseRoomForMissingParticipant(room);
+    broadcastRoom(room);
+    return;
+  }
+  const revealedAtMs = room.encounter.revealAtMs;
+  room.encounter = { ...room.encounter, phase: 'responding', triggerKind: room.triggerKind };
+  room.phase = 'playing';
+  broadcast(room, {
+    type: 'trigger_revealed',
+    encounterId,
+    direction: room.encounter.direction,
+    kind: room.triggerKind,
+    category: triggerCategory(room.triggerKind),
+    revealedAtMs,
+    responseEndsAtMs: room.encounter.responseEndsAtMs,
+  });
+  broadcastRoom(room);
+  scheduleBots(room);
+  room.resolveTimer = setTimeout(
+    () => resolveEncounter(room),
+    Math.max(0, room.encounter.responseEndsAtMs - Date.now()),
+  );
+}
+
+function resolveEncounter(room: Room): void {
+  if (!['intro', 'playing'].includes(room.phase) || !room.encounter || !room.triggerKind) return;
   clearAttemptTimers(room);
   const events = [...room.hisses.values()].sort((a, b) => a.slot - b.slot);
-  const intervals = events.map((event) => ({ slot: event.slot, startMs: event.activeStartMs, endMs: event.activeEndMs }));
-  const result = calculateOverlap(intervals);
+  const result = evaluateEncounter(room.attemptId, room.triggerKind, events, [...room.earlyHisses]);
+  const progress = applyNightRound(room.night, result);
   room.attempts += 1;
   room.bestOverlapMs = Math.max(room.bestOverlapMs, result.overlapMs);
-  room.phase = result.success ? 'success' : 'feedback';
-  broadcast(room, {
-    type: 'attempt_result',
-    attemptId: room.attemptId,
-    success: result.success,
-    overlapMs: result.overlapMs,
-    ...(result.success ? {} : { gag: classifyFailure(intervals) }),
-    events,
-  });
-  if (result.success) {
+  room.night = progress.night;
+  room.encounter = { ...room.encounter, phase: 'feedback', triggerKind: room.triggerKind };
+  room.phase = progress.result === 'win' ? 'success' : progress.result === 'loss' ? 'failure' : 'feedback';
+  broadcast(room, { type: 'encounter_result', ...result, progress });
+  if (progress.result) {
     clearChallengeTimer(room);
-    broadcast(room, { type: 'room_result', result: 'win', attempts: room.attempts, bestOverlapMs: room.bestOverlapMs });
+    broadcast(room, {
+      type: 'room_result', result: progress.result, attempts: room.attempts,
+      bestOverlapMs: room.bestOverlapMs, night: room.night,
+    });
   }
   broadcastRoom(room);
 
-  if (result.success) {
+  if (progress.result) {
     const addedPlayers = fillPublicRoomFromQueue(room);
     if (addedPlayers > 0) {
       room.phase = 'feedback';
-      room.attempts = 0;
-      room.bestOverlapMs = 0;
+      resetNight(room);
       broadcastRoom(room);
       room.feedbackTimer = setTimeout(() => startAttempt(room), ROOM_TIMING.feedbackMs);
     }
@@ -447,16 +525,42 @@ function resolveAttempt(room: Room): void {
 }
 
 function scheduleBots(room: Room): void {
-  const schedule = buildBotSchedule(room.id, room.attemptId, room.bots.map((bot) => bot.slot), botProfileMode);
+  if (!room.triggerKind) return;
+  const schedule = buildTriggerBotSchedule(room.id, room.attemptId, room.triggerKind, room.bots.map((bot) => bot.slot));
   schedule.forEach(({ slot, delayMs }) => {
     if (delayMs === null) return;
-    room.botTimers.push(setTimeout(() => recordHiss(room, slot, false), delayMs));
+    room.botTimers.push(setTimeout(() => recordHiss(room, slot, true), delayMs));
   });
 }
 
-function recordHiss(room: Room, slot: CatSlot, canTriggerBots = true): void {
-  if (room.phase !== 'playing' || room.hisses.has(slot)) return;
-  const acceptedAtMs = Date.now();
+function alignPendingBotsToHuman(room: Room): void {
+  room.botTimers.forEach(clearTimeout);
+  room.botTimers = [];
+  room.bots
+    .filter((bot) => !room.hisses.has(bot.slot))
+    .sort((a, b) => a.slot - b.slot)
+    .forEach((bot, index) => {
+      room.botTimers.push(setTimeout(() => recordHiss(room, bot.slot, true), 40 + index * 40));
+    });
+}
+
+function recordHiss(room: Room, slot: CatSlot, fromBot = false, estimatedServerTimeMs?: number): void {
+  if (room.hisses.has(slot) || room.earlyHisses.has(slot)) return;
+  const receivedAtMs = Date.now();
+  if (room.phase === 'intro' && (room.encounter?.phase === 'approaching' || room.encounter?.phase === 'clue')) {
+    const acceptedAtMs = receivedAtMs;
+    room.earlyHisses.add(slot);
+    const interval = intervalFromAcceptedHiss(slot, acceptedAtMs);
+    room.hisses.set(slot, { slot, acceptedAtMs, activeStartMs: interval.startMs, activeEndMs: interval.endMs });
+    broadcast(room, { type: 'hiss_started', slot, serverTimeMs: acceptedAtMs, attemptId: room.attemptId });
+    resolveEncounter(room);
+    return;
+  }
+  if (room.phase !== 'playing' || room.encounter?.phase !== 'responding' || !room.triggerKind) return;
+  if (!fromBot && triggerCategory(room.triggerKind) === 'threat') alignPendingBotsToHuman(room);
+  const acceptedAtMs = fromBot
+    ? receivedAtMs
+    : compensatedAcceptedAtMs(receivedAtMs, estimatedServerTimeMs, room.encounter.revealAtMs);
   const interval = intervalFromAcceptedHiss(slot, acceptedAtMs);
   room.hisses.set(slot, {
     slot,
@@ -465,12 +569,11 @@ function recordHiss(room: Room, slot: CatSlot, canTriggerBots = true): void {
     activeEndMs: interval.endMs,
   });
   broadcast(room, { type: 'hiss_started', slot, serverTimeMs: acceptedAtMs, attemptId: room.attemptId });
-
-  if (room.hisses.size === 1) {
-    room.resolveTimer = setTimeout(() => resolveAttempt(room), ROOM_TIMING.attemptResolveMs);
-    if (canTriggerBots) scheduleBots(room);
+  if (triggerCategory(room.triggerKind) === 'safe') {
+    resolveEncounter(room);
+    return;
   }
-  if (room.hisses.size === CAT_COUNT) resolveAttempt(room);
+  if (room.hisses.size === CAT_COUNT) resolveEncounter(room);
 }
 
 function joinRoom(session: ClientSession, requestedRoomId?: string, reconnectToken?: string): void {
@@ -586,12 +689,8 @@ server.on('connection', (socket) => {
       quickStart(room);
       return;
     }
-    if (message.type === 'replay' && ['feedback', 'success', 'timeout'].includes(room.phase)) {
-      if (room.phase === 'success' || room.phase === 'timeout') {
-        clearChallengeTimer(room);
-        room.attempts = 0;
-        room.bestOverlapMs = 0;
-      }
+    if (message.type === 'replay' && ['feedback', 'success', 'failure', 'timeout'].includes(room.phase)) {
+      if (isTerminalPhase(room.phase)) resetNight(room);
       startAttempt(room);
       return;
     }
@@ -609,7 +708,7 @@ server.on('connection', (socket) => {
         return;
       }
       if (message.action === 'hiss') {
-        recordHiss(room, session.slot);
+        recordHiss(room, session.slot, false, message.estimatedServerTimeMs);
       } else if (message.action === 'meow' && now - session.lastMeowMs >= 800) {
         session.lastMeowMs = now;
         broadcast(room, { type: 'social_action', slot: session.slot, action: 'meow', serverTimeMs: now });

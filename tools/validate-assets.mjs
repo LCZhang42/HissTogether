@@ -4,6 +4,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 const root = resolve('apps/client/public/assets/cats');
+const triggerRoot = resolve('apps/client/public/assets/triggers');
 const expectedKittens = [
   'kitten_01_lightning_tail',
   'kitten_02_ground_gripper',
@@ -92,7 +93,10 @@ async function main() {
   if (hissSha1 !== 'f7df5552d045bff90274a4069aa5635bedf5e4c6') {
     throw new Error(`cat-hiss-zabuhailo.wav: unexpected SHA-1 ${hissSha1}`);
   }
-  console.log(`Validated ${expectedKittens.length * 9} transparent 64x64 key-pose PNGs, metadata and CC0 hiss WAV.`);
+  for (const trigger of ['dog', 'cat-mom', 'stranger', 'vacuum-mom']) {
+    inspectPng(await readFile(resolve(triggerRoot, `${trigger}.png`)), `triggers/${trigger}.png`);
+  }
+  console.log(`Validated ${expectedKittens.length * 9} cat poses, 4 trigger sprites, metadata and CC0 hiss WAV.`);
 }
 
 await main();

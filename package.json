@@ -16,7 +16,8 @@
     "test": "npm run build -w @qiqihar/shared && npm run build -w @qiqihar/server && vitest run",
     "test:browser": "npm run build -w @qiqihar/shared && npm run build -w @qiqihar/server && vitest run --config vitest.browser.config.ts",
     "test:watch": "vitest",
-    "validate:assets": "node tools/validate-assets.mjs"
+    "validate:assets": "node tools/validate-assets.mjs",
+    "simulate:triggers": "node tools/simulate-trigger-balance.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

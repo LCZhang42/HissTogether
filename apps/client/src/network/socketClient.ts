@@ -51,7 +51,12 @@ export class SocketClient {
   }
 
   sendAction(action: 'hiss' | 'meow' | 'interact'): void {
-    this.send({ type: 'action', seq: this.sequence++, action });
+    this.send({
+      type: 'action',
+      seq: this.sequence++,
+      action,
+      estimatedServerTimeMs: Date.now() + (this.smoothedOffset ?? 0),
+    });
   }
 
   sendMove(direction: -1 | 0 | 1): void {
